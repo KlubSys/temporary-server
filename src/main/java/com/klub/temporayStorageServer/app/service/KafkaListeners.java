@@ -1,6 +1,7 @@
 package com.klub.temporayStorageServer.app.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.klub.temporayStorageServer.app.configs.ftp.CustomFtpClient;
 import com.klub.temporayStorageServer.app.helper.JobExecutionStatusEnum;
 import com.klub.temporayStorageServer.app.helper.JobStatusEnum;
 import com.klub.temporayStorageServer.app.model.FileDecompositionJobPayload;
@@ -10,12 +11,15 @@ import com.klub.temporayStorageServer.app.service.api.storeClient.StoreApi;
 import com.klub.temporayStorageServer.app.service.api.storeClient.dto.response.blockGroup.SaveBlockGroupResponse;
 import com.klub.temporayStorageServer.app.service.api.storeClient.dto.response.datablock.SaveDataBlockResponse;
 import com.klub.temporayStorageServer.app.service.api.storeClient.dto.response.store.GetRandomOnlineStoreResponse;
+import org.apache.commons.net.ftp.FTPFile;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.Base64;
@@ -28,13 +32,18 @@ public class KafkaListeners {
     private final ObjectMapper defaultMapper;
     private final StoreApi storeApi;
     private final JobSchedulerApi jobSchedulerApi;
+    private final CustomFtpClient ftpClient;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
+    @Value("${batch}")
+    private Integer batch;
+
     @Autowired
-    public KafkaListeners(ObjectMapper defaultMapper, StoreApi storeApi, JobSchedulerApi jobSchedulerApi, KafkaTemplate<String, String> kafkaTemplate) {
+    public KafkaListeners(ObjectMapper defaultMapper, StoreApi storeApi, JobSchedulerApi jobSchedulerApi, CustomFtpClient ftpClient, KafkaTemplate<String, String> kafkaTemplate) {
         this.defaultMapper = defaultMapper;
         this.storeApi = storeApi;
         this.jobSchedulerApi = jobSchedulerApi;
+        this.ftpClient = ftpClient;
         this.kafkaTemplate = kafkaTemplate;
     }
 
@@ -54,9 +63,14 @@ public class KafkaListeners {
 
 
 
-            File file = new File(
+            FileOutputStream out = new FileOutputStream(payload.getFilename());
+            ftpClient.getInstance().retrieveFile(
+                    String.format("/klub/temp_storage/%s", payload.getFilename()), out);
+
+            /*File file = new File(
                     new File("D:\\FtpServer\\klub\\temp_storage"),
-                    payload.getFilename());
+                    payload.getFilename());*/
+            File file = new File(payload.getFilename());
             RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
 
             //Worket processing the job
@@ -71,7 +85,7 @@ public class KafkaListeners {
             //Find a free store
             //Upload the databloc
 
-            byte[] container = new byte[100];
+            byte[] container = new byte[batch];
             boolean hasProcessedFirstBlock = false;
             String previousBlocGroupRef = null;
 
@@ -96,7 +110,7 @@ public class KafkaListeners {
                         .getRandomOnlineStore(encoded.length(),
                                 blocGroupRes.getData().getIdentifier()
                         );
-                if (storeRes.getStoreRef() == null || storeRes.getStoreRef().length() == 0){
+                if (storeRes.getStoreRef() == null || storeRes.getStoreRef().length() == 0) {
                     throw new RuntimeException("No Store found");
                 }
                 SaveDataBlockResponse blocDataRes = storeApi.createDataBloc(
@@ -107,7 +121,7 @@ public class KafkaListeners {
                 if (!hasProcessedFirstBlock) {
                     //TODO message kafka on file channel tp update the file data
                     //TODO use constants for topic name
-                    final FileMetadataUpdatePayload p =  new FileMetadataUpdatePayload();
+                    final FileMetadataUpdatePayload p = new FileMetadataUpdatePayload();
                     p.setFileId(payload.getFileId());
                     p.getData().put("first_blockGroup_id", blocGroupRes.getData().getIdentifier());
 
