@@ -15,7 +15,7 @@ public class DataBlockDto {
     private Long id;
     private String identifier;
     private Integer size;
-
+    private String data;
     private String blockGroupRef;
     private String dataStoreRef;
 }

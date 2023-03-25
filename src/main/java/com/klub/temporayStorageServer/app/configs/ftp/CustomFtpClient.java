@@ -27,7 +27,7 @@ public class CustomFtpClient {
     private FTPClient ftp;
 
     public void open() throws IOException {
-        if (ftp != null) return;
+        //if (ftp != null) return;
 
         ftp = new FTPClient();
 
