@@ -57,19 +57,27 @@ public class KafkaListeners {
         System.out.println("Received Data " + data);
         try {
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Got action from queue [data]" + data).build());
+                    .text("Got action from queue").build());
 
             FileDecompositionJobPayload payload = defaultMapper.readValue(
                     data, FileDecompositionJobPayload.class);
+            centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
+                    .text("Load payload").build()
+                    .addData("data", payload));
+
+
             //Claim the job
             Map<String, Object> jobUpdateData = new HashMap<>();
             //TODO Master action
             jobUpdateData.put("execution_status", JobExecutionStatusEnum.CLAIMED);
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Update job execution status " + payload.getJobId()).build());
+                    .text("[Job claimed] Update job execution status " + payload.getJobId()).build()
+                    .addData("job_id", payload.getJobId())
+                    .addData("new_execution_status", JobExecutionStatusEnum.CLAIMED));
             jobSchedulerApi.updateJob(payload.getJobId(), jobUpdateData);
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Update Job execution Status [OK]").build());
+                    .text("Update Job execution Status [OK]").build()
+                    .addData("data", jobUpdateData));
 
 
             FileOutputStream out = new FileOutputStream(payload.getFilename());
@@ -82,18 +90,22 @@ public class KafkaListeners {
             File file = new File(payload.getFilename());
             RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("File loaded" + data).build());
+                    .text("Temporarily File loaded").build()
+                    .addData("file", payload.getFilename())
+                    .addData("job", payload));
 
             //Worket processing the job
             jobUpdateData = new HashMap<>();
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Update job status " + payload.getJobId()).build());
+                    .text("[Job Started | Processing] Updating job " + payload.getJobId()).build());
             jobUpdateData.put("execution_status", JobExecutionStatusEnum.PROCESSING);
             jobUpdateData.put("job_status", JobStatusEnum.STARTED);
             jobSchedulerApi.updateJob(payload.getJobId(), jobUpdateData);
 
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Update job execution status updated " + payload.getJobId()).build());
+                    .text("[Job Started | Processing] Updating job " + payload.getJobId()).build()
+                    .addData("job", payload.getJobId())
+                    .addData("data", jobUpdateData));
 
             //Read byte for a given data block
             //Create a block group ref the databloc
@@ -117,48 +129,72 @@ public class KafkaListeners {
                 System.out.println(encoded);
 
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text(String.format("Data bloc red batch %d | %d bytes enc %s", batch, rd.length, encoded)).build());
+                        .text("Data bloc red " + (blocCount + 1)).build()
+                        .addData("batch", batch)
+                        .addData("N°", (blocCount + 1))
+                        .addData("bytes_red", rd.length)
+                        .addData("encoded_bloc", encoded));
 
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text("Creating block group").build());
+                        .text("[Bloc Group] Creating").build());
                 SaveBlockGroupResponse blocGroupRes = storeApi
                         .createBlockGroup(null, previousBlocGroupRef, encoded, encoded.length());
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text("Bloc group group created" + data).build());
+                        .text("[Bloc group] created").build()
+                        .addData("batch", batch)
+                        .addData("bloc_group", blocGroupRes.getData())
+                        .addData("N°", (blocCount + 1))
+                        .addData("bytes_red", rd.length)
+                        .addData("encoded_bloc", encoded));
+
                 System.out.println("Block Group created " + blocGroupRes.getData().getId());
                 previousBlocGroupRef = blocGroupRes.getData().getIdentifier();
 
                 //TODO for the length use a variable
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text("Requested a free online store").build());
+                        .text("[Store] Requested a free online store").build()
+                        .addData("bloc_group", blocGroupRes.getData().getIdentifier())
+                        .addData("data_size_", encoded.length() + " bytes"));
                 GetRandomOnlineStoreResponse storeRes = storeApi
                         .getRandomOnlineStore(encoded.length(),
                                 blocGroupRes.getData().getIdentifier()
                         );
                 if (storeRes.getStoreRef() == null || storeRes.getStoreRef().length() == 0) {
+
                     centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                            .text("Find free online store failed").build());
+                            .text("[Store] Find free online store failed").build()
+                            .addData("bloc_group", blocGroupRes.getData().getIdentifier())
+                            .addData("", encoded.length() + " bytes"));
+
                     throw new RuntimeException("No Store found");
                 }
+
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text("Free online store found [OK]" + data).build());
+                        .text("[Store] Free online store found [OK]").build()
+                        .addData("store", storeRes.getStoreRef())
+                        .addData("bloc_group", blocGroupRes.getData().getIdentifier())
+                        .addData("data_size", encoded.length() + " bytes"));
 
                 //Data bloc
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text("Creating data block").build());
+                        .text("[Data bloc] Creating").build()
+                        .addData("store", storeRes.getStoreRef())
+                        .addData("bloc_group", blocGroupRes.getData().getIdentifier())
+                        .addData("data_size", encoded.length() + " bytes"));
 
                 SaveDataBlockResponse blocDataRes = storeApi.createDataBloc(
                         encoded, encoded.length(), storeRes.getStoreRef(),
                         blocGroupRes.getData().getIdentifier()
                 );
                 centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                        .text("Got action from queue [data]" + data).build());
+                        .text("[Data Bloc] Created N° " + (blocCount + 1)).build()
+                        .addData("data", blocDataRes.getData()));
 
                 if (!hasProcessedFirstBlock) {
                     //TODO message kafka on file channel tp update the file data
                     //TODO use constants for topic name
                     centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                            .text("Processing first block group").build());
+                            .text("[File and first bloc] Processing first block group").build());
 
                     final FileMetadataUpdatePayload p = new FileMetadataUpdatePayload();
                     p.setFileId(payload.getFileId());
@@ -168,16 +204,18 @@ public class KafkaListeners {
                             .addCallback(result -> {
                                 try {
                                     centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                                            .text("File Update action pushed to queue").build());
+                                            .text("[File and first bloc] File Update action pushed to queue").build()
+                                            .addData("data", p));
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
                                 }
                                 System.out.println("File Update Sent");
                             }, ex -> {
-                                System.err.println("Error occured");
+                                System.err.println("Error occurred");
                                 try {
                                     centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                                            .text("File Update to queue failed").build());
+                                            .text("[File and first bloc] File Update to queue failed").build()
+                                            .addData("data", p));
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
                                 }
@@ -197,7 +235,7 @@ public class KafkaListeners {
 
             //TODO Update job as completed
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Update job status " + payload.getJobId()).build());
+                    .text("[Job Completed | Success] Update job " + payload.getJobId()).build());
 
 
             jobUpdateData = new HashMap<>();
@@ -206,7 +244,8 @@ public class KafkaListeners {
             jobSchedulerApi.updateJob(payload.getJobId(), jobUpdateData);
 
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Update job execution status updated  to success and completed" + payload.getJobId()).build());
+                    .text("[Job Completed | Success] Update job " + payload.getJobId()).build()
+                    .addData("data", jobUpdateData));
 
             //Update file to have the count data
             final FileMetadataUpdatePayload p = new FileMetadataUpdatePayload();
@@ -214,12 +253,27 @@ public class KafkaListeners {
             p.getData().put("data_bloc_count", blocCount);
 
             centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
-                    .text("Updating file with bloc count " + blocCount).build());
+                    .text("[File Update] Updating file with bloc count " + blocCount).build()
+                    .addData("bloc_count", blocCount)
+                    .addData("file", payload.getFileId()));
             kafkaTemplate.send("file_metadata", defaultMapper.writeValueAsString(p))
                     .addCallback(result -> {
                         System.out.println("File Update Sent For bloc Count");
+                        try {
+                            centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
+                                    .text("[File Update] Update file with bloc count pushed to queue ").build()
+                                    .addData("data", p));
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
                     }, ex -> {
-                        System.err.println("Error odccured");
+                        System.err.println("Error occurred");
+                        try {
+                            centralLoggerServerApi.dispatchLog(CentralServerLogMessage.builder()
+                                    .text("[File Update] Updating file with bloc count Failed").build());
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
                         ex.printStackTrace();
                     });
 
